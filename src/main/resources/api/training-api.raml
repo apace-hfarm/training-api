@@ -1,0 +1,21 @@
+#%RAML 1.0
+title: Training Project n.2
+description: These API implement simple interaction between file system, RDBMS and SFSC.
+protocols: [HTTP,HTTPS]
+version: v1
+mediaType: [application/json, application/xml]
+
+/training-api/account:
+  description: Use this API to retrieve the customer's details given the customerId.
+  post:
+    responses:
+      200:
+        body:
+          application/json:
+            examples: 
+              output: {"message": "Accounts successfully read"}
+      400:
+        body: 
+          application/json:
+            examples: 
+              output: {"Bad request"}

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd ">
+    <http:listener-config name="training-api-httpListenerConfig">
+        <http:listener-connection host="0.0.0.0" port="${http.port}" />
+    </http:listener-config>
+    <apikit:config name="training-api-config" api="training-api.raml" outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus" />
+    <flow name="training-api-main">
+        <http:listener config-ref="training-api-httpListenerConfig" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:router config-ref="training-api-config" />
+        <error-handler>
+            <on-error-propagate type="APIKIT:BAD_REQUEST">
+                <set-payload value="#[%dw 2.0 output application/json --- {message: &quot;Bad request&quot;}]" doc:name="Bad request" doc:id="cee1103a-a737-4cd3-894a-bf19991155a3" />
+                <set-variable value="#[400]" doc:name="HTTP 400" doc:id="6a701aec-f80e-4f7c-9921-fa3b01c19490" variableName="httpStatus" />
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_FOUND">
+                <set-payload value="#[%dw 2.0 output application/json --- {message: &quot;Resource not found&quot;}]" doc:name="Resource not found" doc:id="e2c1e9eb-6a08-4280-acb9-46039e3a14b5" />
+                <set-variable value="#[404]" doc:name="HTTP 404" doc:id="05b79c1d-066f-4de8-84c8-38b9a167be36" variableName="httpStatus" />
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED">
+                <set-payload value="#[%dw 2.0 output application/json --- {message: &quot;Method not allowed&quot;}]" doc:name="Method not allowed" doc:id="d928f800-80fe-45e7-90c0-5c40aac56c38" />
+                <set-variable value="#[405]" doc:name="HTTP 405" doc:id="fd959a5c-1fce-4156-9bee-b2b253783940" variableName="httpStatus" />
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_ACCEPTABLE">
+                <set-payload value="#[%dw 2.0 output application/json --- {message: &quot;Not acceptable&quot;}]" doc:name="Not acceptable" doc:id="fc3655bb-05ae-4134-836c-8b992854b567" />
+                <set-variable value="#[406]" doc:name="HTTP 406" doc:id="99a8bb71-2029-4a7a-91e2-2606d91452c7" variableName="httpStatus" />
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:UNSUPPORTED_MEDIA_TYPE">
+                <set-payload value="#[%dw 2.0 output application/json --- {message: &quot;Unsupported media type&quot;}]" doc:name="Unsupported media type" doc:id="60356cde-66a1-4dc7-8eed-eb359c7a5f96" />
+                <set-variable value="#[415]" doc:name="HTTP 415" doc:id="cd301bd5-5a68-46d3-b245-d73244a5f87d" variableName="httpStatus" />
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_IMPLEMENTED">
+                <set-payload value="#[%dw 2.0 output application/json --- {message: &quot;Not Implemented&quot;}]" doc:name="Not Implemented" doc:id="e86e2cf6-0c88-4d8d-8668-2089abdc8d61" />
+                <set-variable value="#[501]" doc:name="HTTP 501" doc:id="dd429ec4-5a45-4a0d-9347-cb16eeb604b1" variableName="httpStatus" />
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+    <flow name="training-api-console">
+        <http:listener config-ref="training-api-httpListenerConfig" path="/console/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:console config-ref="training-api-config" />
+        <error-handler>
+            <on-error-propagate type="APIKIT:NOT_FOUND">
+                <set-payload value="#[%dw 2.0 output application/json --- {message: &quot;Resource not found&quot;}]" doc:name="Resource not found" doc:id="35249fe4-4696-48d2-abf6-be8a0568c81c" />
+                <set-variable value="#[404]" doc:name="HTTP 404" doc:id="45a89050-d708-4399-8741-efee931ce640" variableName="httpStatus" />
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+    <flow name="post:\training-api\account:training-api-config">
+        <flow-ref doc:name="callSalesforceBulk2API" doc:id="71163271-027a-4640-b5f3-b8014d3ad370" name="callSalesforceBulk2API" />
+        <set-payload value="#[%dw 2.0&#xA;output application/json&#xA;---&#xA;{&#xA; 'message': 'Accounts successfully read'&#xA;}]" doc:name="payload" doc:id="0e52e865-497c-411a-9754-1f50055e33eb" />
+    </flow>
+</mule>

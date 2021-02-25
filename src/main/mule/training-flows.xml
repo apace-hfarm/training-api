@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:validation="http://www.mulesoft.org/schema/mule/validation"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd">
+  <configuration-properties doc:name="Configuration properties" doc:id="db4c4855-3cd9-4ca0-bf75-8bea6225b3ec" file="${env}.properties" />
+  <global-property doc:name="Global Property" doc:id="530dcf91-e054-4a7a-87b8-3cdd804dd65e" name="env" value="dev" />
+	<http:request-config name="HTTP_SF_API_Request_config" doc:name="HTTP Request configuration" doc:id="0d71d341-6b55-4269-9dff-6b68f98c5828" basePath="${salesforce.api.basepath}">
+		<http:request-connection protocol="HTTPS" host="${salesforce.host}" port="${salesforce.port}">
+			<reconnection >
+				<reconnect count="5" />
+			</reconnection>
+		</http:request-connection>
+	</http:request-config>
+  <db:config name="Database_Config" doc:name="Database Config" doc:id="2298de07-5f2d-4e62-83cc-3ddcc54fcfe8" >
+    <db:oracle-connection host="${database.host}" port="${database.port}" user="${database.schema}" password="${database.password}" instance="${database.servicename}" >
+      <reconnection >
+        <reconnect count="5" />
+      </reconnection>
+      <db:pooling-profile />
+    </db:oracle-connection>
+  </db:config>
+  <file:config name="File_Config" doc:name="File Config" doc:id="e8cef9b9-27af-4866-8d7f-5dfa139767c9" >
+    <file:connection workingDir="${fs.workingdir}"/>
+  </file:config>
+  <sub-flow name="callSalesforceBulk2API" doc:id="1a802c16-0a5c-43d0-8e0e-a5a18f63361f" doc:description="This flow chains the mandatory steps to submit a job to Salesforce with the related batches of records.">
+		<flow-ref doc:name="doSalesforceLogin" doc:id="720cef4f-1a45-4dde-a1b9-6886b7d9a9c4" name="doSalesforceLogin" />
+		<http:request method="POST" doc:name="POST /services/data/APIversion/jobs/query" doc:id="8bba9243-df07-44e0-ba93-d15987973fbd" config-ref="HTTP_SF_API_Request_config" path="${salesforce.api.query.job}" target="jobInfo">
+							<reconnect count="5" />
+      <http:body><![CDATA[#[%dw 2.0
+output application/json
+---
+{
+  "operation": "query",
+  "query": "Select Id,isPersonAccount,FirstName,LastName,PersonEmail,PersonMobilePhone,Dynamics_id__c,PersonBirthdate,BillingStreet,BillingCity,BillingState,BillingPostalCode,Billing_Address_Other__c From Account Where RecordType.DeveloperName = 'PersonAccount' AND LAstModifiedDate >= 2021-02-01T00:00:00.000Z",
+  "contentType" : "CSV",
+  "columnDelimiter" : "COMMA",
+  "lineEnding" : "LF"
+}]]]></http:body>
+							<http:headers><![CDATA[#[%dw 2.0
+output application/json
+---
+{
+	Authorization: "Bearer " ++ vars.accessToken as String
+}]]]></http:headers>
+						</http:request>
+		<logger level="INFO" doc:name="Log jobInfo" doc:id="1f180f90-5eed-4a8a-8c02-82964ccdd7b3" message="jobInfo: #[vars.jobInfo]" />
+    <try doc:name="Try" doc:id="16defe8c-30e2-449d-b773-5449f1c78e59" >
+      <flow-ref doc:name="monitorJobProcessingStatus" doc:id="8973959b-80d7-4e26-b95c-8f1a20026b8e" name="monitorJobProcessingStatus"/>
+      <error-handler >
+        <on-error-continue enableNotifications="true" logException="false" doc:name="On Error Continue" doc:id="f2086308-243f-4d41-9bb7-06d57f1e955b" >
+          <logger level="INFO" doc:name="do nothing if the submitted jobs are still running, try to go ahead" doc:id="a5146e7f-0bf9-4e42-8a37-fd57cece5ace" />
+        </on-error-continue>
+      </error-handler>
+    </try>
+    <choice doc:name="Choice" doc:id="ae1ef023-7c49-45f2-9938-40745c0d70be">
+      <when expression="#[!isEmpty(vars.queryJobInfo) and ((vars.queryJobInfo.state default '') contains ('JobComplete'))]" >
+        <flow-ref doc:name="retrieveResults" doc:id="9671a667-d6ac-43e3-8e9e-c80f1ac67e79" name="retrieveResults"/>
+      </when>
+    </choice>
+    <flow-ref doc:name="readFromDbToWriteCsvFile" doc:id="de5424c7-33aa-4991-adf5-bd53658dc43b" name="readFromDbToWriteCsvFile"/>
+  </sub-flow>
+  <sub-flow name="monitorJobProcessingStatus" doc:id="9a8b3196-a7fe-46f1-98ef-5215115dd375" >
+    <try doc:name="Try" doc:id="95cfbf29-6d56-49f8-a705-970718fa0119" >
+      <until-successful maxRetries="100" doc:name="Until job is not completed" doc:id="b6b15618-41a8-4bb8-aa67-ffb74bc37bd6" millisBetweenRetries="10000">
+        <http:request method="GET" doc:name="GET /services/data/APIversion/jobs/query/queryJobId" doc:id="1c9b8aa9-db06-46b1-b9bd-96b4f77f63b6" path="${salesforce.api.query.job}/{queryJobId}" config-ref="HTTP_SF_API_Request_config" target="queryJobInfo">
+							<reconnect count="5" />
+      <http:headers><![CDATA[#[%dw 2.0
+output application/json
+---
+{
+	Authorization: "Bearer " ++ vars.accessToken as String
+}]]]></http:headers>
+			<http:uri-params><![CDATA[#[output application/java
+---
+{
+	queryJobId : vars.jobInfo.id
+}]]]></http:uri-params>
+						</http:request>
+        <set-variable value="#[%dw 2.0&#10;output text/plain&#10;---&#10;!isEmpty(vars.queryJobInfo) and !(&#10;    (vars.queryJobInfo.state contains ('InProgress')) or &#10;    (vars.queryJobInfo.state contains ('UploadComplete'))&#10;)]" doc:name="isTerminated" doc:id="8e9ebddd-2e2d-444a-a09b-e05c176eae7a" variableName="isTerminated"/>
+        <logger level="INFO" doc:name="Log queryJobInfo" doc:id="719549b5-c8b0-4f3b-a137-1ca5f5e54957" message="queryJobInfo: #[vars.queryJobInfo]" />
+        <validation:is-false doc:name="isTerminated is true" doc:id="3b681c8f-9207-4711-9a4d-fffe383a0444" expression="#[!(vars.isTerminated as Boolean)]"/>
+      </until-successful>
+      <error-handler >
+        <on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="117ac832-f3d1-4291-b813-e2109a59ffda" type="MULE:RETRY_EXHAUSTED">
+          <logger level="INFO" doc:name="Log 'until-successful' retries exhausted" doc:id="4b168dc8-8a29-4667-9db9-88cf6ac2b814" message="'until-successful' retries exhausted. Mule has not been able to read the batch results for the jobId #[vars.jobInfo.id as String]."/>
+        </on-error-propagate>
+      </error-handler>
+    </try>
+  </sub-flow>
+  <sub-flow name="retrieveResults" doc:id="357538a6-f6c0-430a-adbb-081a6e825a57" >
+    <http:request method="GET" doc:name="GET /services/data/APIversion/jobs/query/queryJobId/results (First locator)" doc:id="c90dffdc-446e-4c3f-9aa4-2e3384f68a4e" config-ref="HTTP_SF_API_Request_config" path="${salesforce.api.query.job}/{queryJobId}/results" targetValue="#[message]" target="queryJobResult">
+							<reconnect count="5" />
+      <http:headers><![CDATA[#[%dw 2.0
+output application/json
+---
+{
+	Authorization: "Bearer " ++ vars.accessToken as String
+}]]]></http:headers>
+			<http:uri-params><![CDATA[#[output application/java
+---
+{
+	queryJobId : vars.jobInfo.id
+}]]]></http:uri-params>
+      <http:query-params ><![CDATA[#[%dw 2.0
+output application/json skipNullOn="everywhere"
+---
+{
+	locator: vars.locator
+}]]]></http:query-params>
+						</http:request>
+    <logger level="INFO" doc:name="Log queryJobResult" doc:id="a7d3f65a-00e8-44c6-801f-10be3dbb73c8" message="queryJobResult: #[vars.queryJobResult]" />
+    <flow-ref doc:name="storeSalesforceAccountIntoDatabase" doc:id="c002cfd7-0092-4184-a9fd-5a87a7b0992c" name="storeSalesforceAccountIntoDatabase"/>
+    <choice doc:name="Choice" doc:id="81d90ec8-290f-4068-b1ec-161fcafeed06">
+      <when expression="#[!isEmpty(vars.queryJobResult.attributes.headers['sforce-locator']) and !(vars.queryJobResult.attributes.headers['sforce-locator'] default '' contains ('null'))]">
+        <logger level="INFO" doc:name="Log there are other results for this job" doc:id="dea783b2-2f44-46f9-a828-fc5884a3d3c1" message="...there are other results for the job #[vars.jobInfo.id]..."/>
+        <set-variable value="#[vars.queryJobResult.attributes.headers['sforce-locator'] as String]" doc:name="locator" doc:id="2ee01d46-a6f7-45ec-9473-14c98fe7b10b" variableName="locator"/>
+        <flow-ref doc:name="retrieveResults" doc:id="5138c110-1d2a-4aa9-9665-bd378dd9265d" name="retrieveResults"/>
+      </when>
+      <otherwise >
+        <logger level="INFO" doc:name="Log there are not further results for the job" doc:id="f29d043c-d697-458f-b775-21fe855d11cf" message="...there are not further results for the job #[vars.jobInfo.id]..."/>
+      </otherwise>
+    </choice>
+  </sub-flow>
+  <sub-flow name="storeSalesforceAccountIntoDatabase" doc:id="815a5879-8da2-49c3-9fe2-8eb227de765e" >
+    <set-payload value='#[%dw 2.0&#10;output application/java&#10;---&#10;vars.queryJobResult.payload map () -&gt; {&#10;	id: $.Id,&#10;	isPersonAccount: $.IsPersonAccount,&#10;	lastName: $.LastName,&#10;	firstName: $.FirstName,&#10;	personEmail: $.PersonEmail,&#10;	personMobilePhone: $.PersonMobilePhone,&#10;	dynamicsId: $.Dynamics_Id__c,&#10;	personBirthdate: if(!isEmpty($.PersonBirthdate)) $.PersonBirthdate else null,&#10;	billingStreet: $.BillingStreet,&#10;	billingCity: $.BillingCity,&#10;	billingState: $.BillingState,&#10;	billingPostalCode: $.BillingPostalCode,&#10;	billingAddressOther: $.Billing_Address_Other__c&#10;}]' doc:name="payload" doc:id="84070f12-8118-4fa9-9176-f3e211b04d6e" />
+    <db:bulk-update doc:name="Bulk update ACCOUNT table" doc:id="1fdbf463-f08a-4354-b2d9-7c3de63b0c00" config-ref="Database_Config" target="accountUpsertResult">
+      <reconnect count="5" />
+      <db:sql ><![CDATA[${database.account.upsert}]]></db:sql>
+    </db:bulk-update>
+    <logger level="INFO" doc:name="Log accountUpsertResult" doc:id="cf8dcc1e-42e4-4c33-8433-ed8b1643c649" message="accountUpsertResult: #[vars.accountUpsertResult]"/>
+  </sub-flow>
+  <sub-flow name="readFromDbToWriteCsvFile" doc:id="e4ecfa68-42b2-436a-80d2-19b777806462" >
+    <db:select doc:name="Select from ACCOUNT table" doc:id="9e38a548-4592-49d5-a9b0-32a1cb3301e9" config-ref="Database_Config">
+      <db:sql ><![CDATA[${database.account.select}]]></db:sql>
+    </db:select>
+    <set-payload value="#[%dw 2.0&#10;import * from dw::core::Strings&#10;fun formatDate(d) = if(isEmpty(d)) null else (((d withMaxSize 10) replace &quot;-&quot; with(&quot;/&quot;)) splitBy(&quot;/&quot;))[2] ++ '/' ++ (((d withMaxSize 10) replace &quot;-&quot; with(&quot;/&quot;)) splitBy(&quot;/&quot;))[1] ++ &quot;/&quot; ++ (((d withMaxSize 10) replace &quot;-&quot; with(&quot;/&quot;)) splitBy(&quot;/&quot;))[0]&#10;---&#10;payload map {&#10;	'Id': $.ID,&#10;	'Last Name': $.LASTNAME,&#10;	'First Name': $.FIRSTNAME,&#10;	'Birth Date': formatDate($.PERSONBIRTHDATE),&#10;	'Email': $.PERSONEMAIL,&#10;	'Mobile': $.PERSONMOBILEPHONE,&#10;	'Address (Street)': $.BILLINGSTREET,&#10;	'Address (City)': $.BILLINGCITY,&#10;	'Address (Postal Code)': $.BILLINGPOSTALCODE, &#10;	'Address (State)': $.BILLINGSTATE, &#10;	'Address (Other)': $.BILLINGADDRESSOTHER__C,&#10;	'Old CRM Id': $.DYNAMICS_ID__C&#10;}]" doc:name="payload" doc:id="d7a896cd-69d8-475d-8db2-73fa1e7c0f64" />
+    <file:write doc:name="Write to CSV file" doc:id="20c2366c-9f4e-4f49-a1ef-fe03cd1d2ef7" config-ref="File_Config" path="#['account_data_' ++ now() as String {format: &quot;yyyyMMddHHmmssSSS&quot;} ++ '.csv']" mode="APPEND">
+      <file:content ><![CDATA[#[%dw 2.0
+output application/csv 
+---
+payload]]]></file:content>
+    </file:write>
+  </sub-flow>
+  <sub-flow name="doSalesforceLogin" doc:id="a5cbf299-cf8a-4006-8300-2198c4d8b13b" doc:description="Salesforce REST login to get the accessToken required to use the synchronous API.">
+			<http:request method="POST" doc:name="POST /services/oauth2/token" doc:id="45ac6f85-4463-4d61-a4ce-3e3dd8a3eca1" target="restLogin" config-ref="HTTP_SF_API_Request_config" path="${salesforce.api.rest.authorization.subpath}" targetValue="#[%dw 2.0
+output application/json
+---
+payload]">
+			<http:query-params><![CDATA[#[%dw 2.0
+output application/json
+---
+{
+	grant_type: Mule::p('salesforce.login.param.granttype'),
+	client_id: Mule::p('salesforce.login.param.clientid'),
+	client_secret: Mule::p('salesforce.login.param.clientsecret'),
+	username: Mule::p('salesforce.login.param.username'),
+	password: Mule::p('salesforce.login.param.password')
+}]]]></http:query-params>
+					</http:request>
+		<set-variable value="#[vars.restLogin.access_token]" doc:name="accessToken" doc:id="2f3e2178-67b9-4abe-a3fe-44cea16e33d3" variableName="accessToken" />
+		<logger level="INFO" doc:name="Do login in Salesforce to retrieve the token and store it in accessToken var" doc:id="5bb9d4ef-1c1b-4563-8988-e895f28aed32" message="Doing login in Salesforce..." />
+	</sub-flow>
+</mule>
